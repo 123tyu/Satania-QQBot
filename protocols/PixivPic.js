@@ -189,17 +189,15 @@ async function searchIllust(recvObj, tags, opt) {
     return illust;
 }
 
-async function downloadIllust(illust, recvObj, opt) {
+/**
+ * 下载图片到本地。并处理图片。
+ * 这里返回的是本地图片路径。内存中并没有缓存图片。所以可以做池。
+ * @param {*} image_url 图片地址
+ */
+async function downloadIllust(image_url) {
     try {
-        const illustPath = path.join(secret.tempPath, 'image', 'illust_' + path.basename(illust.image_url));
-        await pixivImg(illust.image_url, illustPath);
-        if (!opt.resend && !(recvObj.type == 1 || recvObj.type == 3 || recvObj.type == 5 || recvObj.type == 6) && recvObj.group != '') {
-            await knex('seen_list').insert({
-                group: recvObj.group,
-                illust_id: illust.id,
-                date: moment().format()
-            });
-        }
+        const illustPath = path.join(secret.tempPath, 'image', 'illust_' + path.basename(image_url));
+        await pixivImg(image_url, illustPath);
         const sourceImg = sharp(illustPath);
         const sourceImgMetadata = await sourceImg.metadata();
         const waterMarkImg = sharp('watermark.png');
@@ -355,11 +353,21 @@ async function PixivPic(recvObj, client, tags, opt) {
     try {
         const illust = await searchIllust(recvObj, tags, opt);
         if (!illust) throw 'illust is null';
-        illustPath = await downloadIllust(illust, recvObj, opt);
+        illustPath = await downloadIllust(illust.image_url);
     } catch {}
 
     if (illustPath) {
         illustCharge[recvObj.group].count--;
+
+        //分离记录看过数据和下载逻辑
+        if (!opt.resend && !(recvObj.type == 1 || recvObj.type == 3 || recvObj.type == 5 || recvObj.type == 6) && recvObj.group != '') {
+            await knex('seen_list').insert({
+                group: recvObj.group,
+                illust_id: illust.id,
+                date: moment().format()
+            });
+        }
+
         client.sendMsg(recvObj, `[QQ:pic=${illustPath}]`);
     } else {
         client.sendMsg(recvObj, `[QQ:pic=${secret.emoticonsPath}\\satania_cry.gif]`);
