@@ -122,6 +122,63 @@ function updateIllusts() {
     childProcess.fork('Pixiv_database.js', [tagList.sexTags.join() + ',' + tagList.charTags.join(), 'day', 0, 0, 7]);
 }
 
+let perTagCount = {}
+
+/**
+ * 初始化各个标签图片个数。
+ */
+function InitGlobalCount(){
+    let index = 0;
+    for (const searchTag of tagList.searchTags) {
+
+        let curindex = index; //防止异步导致下标错乱？？？这里不清楚
+        //分别查出两种图片数量
+        var q = CreateTagsQuery(searchTag.rawTag,true);
+        const notR18Count = (await q.count('* as count'))[0].count;
+        var q2 = CreateTagsQuery(searchTag.rawTag,false);
+        const totalCount = (await q.count('* as count'))[0].count;
+        perTagCount[curindex] = {"notR18Count":notR18Count,"totalCount":totalCount}
+
+        index++;
+    }
+
+    globalTotalCount = await knex('illusts').count('* as count')[0].count;
+    globalNotR18Count = await knex('illusts').where('rating', 'not like', 'r18%').count('* as count')[0].count;
+    perTagCount[-1] = {"notR18Count":globalNotR18Count,"totalCount":globalTotalCount}
+}
+
+InitGlobalCount();//这里可能导致启动过慢 
+
+
+/**
+ * 根据`tags`和`allowR18`开关创建查询
+ * @param tags 查询的标签列表
+ * @param allowR18 是否允许R18图片
+ */
+function CreateTagsQuery(tags,allowR18){
+    let illustsQuery;
+    if (tags) {
+        let stringQuery = '';
+        for (const tag of tags) {
+            stringQuery += stringQuery ? ` or \`tags\` like \'%${tag}%\'` : `(\`tags\` like \'%${tag}%\'`;
+        }
+        if (!allowR18) {
+            stringQuery = '\`rating\` not like \'r18%\' and ' + stringQuery;
+        }
+        stringQuery += ')';
+        illustsQuery = knex('illusts').whereRaw(stringQuery);
+    } else {
+        if (allowR18) {
+            illustsQuery = knex('illusts');
+        } else {
+            illustsQuery = knex('illusts').where('rating', 'not like', 'r18%')
+        }
+    }
+
+    //尽量取最少的列
+    return illustsQuery.select("id","image_url");
+}
+
 async function searchIllust(recvObj, tags, opt) {
     let illustsQuery;
     let illust;
