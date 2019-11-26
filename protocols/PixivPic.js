@@ -502,15 +502,19 @@ async function PixivPic(recvObj, client, tags, opt) {
 
         //分离记录看过数据和下载逻辑
         if (!opt.resend && !(recvObj.type == 1 || recvObj.type == 3 || recvObj.type == 5 || recvObj.type == 6) && recvObj.group != '') {
-            await knex('seen_list').insert({
-                group: recvObj.group,
-                illust_id: illust.id,
-                date: moment().format()
-            });
+            await InsertSeen(recvObj.group,illust.id);
         }
 
         client.sendMsg(recvObj, `[QQ:pic=${illustPath}]`);
     } else {
         client.sendMsg(recvObj, `[QQ:pic=${secret.emoticonsPath}\\satania_cry.gif]`);
     }
+}
+
+async function InsertSeen(group_id,illust_id){
+    await knex('seen_list').insert({
+        group: group_id,
+        illust_id: illust_id,
+        date: moment().format()
+    });
 }
