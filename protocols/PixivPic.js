@@ -150,7 +150,7 @@ function InitGlobalCount(){
     pool[-1] = {"R18Pool":[],"CommonPool":[]};
 }
 
-InitGlobalCount();//这里可能导致启动过慢 
+await InitGlobalCount();//这里可能导致启动过慢 
 
 
 /**
@@ -200,6 +200,10 @@ async function load(tagIndex, tags,loadcount,allowR18)
             }
 
             curpool.push({"IsR18":allowR18, "ImagePath":localPath,"SeenGroups":groups,"illust":element})
+            
+            if (curpool.length >= loadcount) {
+                break;//满了就停。
+            }
         }
     });
     
@@ -210,6 +214,10 @@ async function load(tagIndex, tags,loadcount,allowR18)
  */
 let perPoolCount = 13;
 /**
+ * 触发加载阈值
+ */
+let chufajiazaiyuzhi = 5;
+/**
  * 加载池
  */
 async function LoadPool(){
@@ -218,21 +226,34 @@ async function LoadPool(){
         let curIndex = index;
 
         let needCount = perPoolCount - pool[curIndex].R18Pool.length;
-        await load(curindex,searchTag.rawTag,needCount, true)
+        if (needCount >= chufajiazaiyuzhi) {
+            await load(curindex,searchTag.rawTag,needCount, true);
+        }
 
         let needCount = perPoolCount - pool[curIndex].CommonPool.length;
-        await load(curindex,searchTag.rawTag,needCount, false)
+        if (needCount >= chufajiazaiyuzhi) {
+            await load(curindex,searchTag.rawTag,needCount, false);
+        }
 
         index++;
     }
 
     index = -1;
     let needCount = perPoolCount - pool[index].R18Pool.length;
-    await load(curindex,searchTag.rawTag,needCount, true)
+    if (needCount >= chufajiazaiyuzhi) {
+        await load(curindex,searchTag.rawTag,needCount, true);
+    }
+
 
     let needCount = perPoolCount - pool[index].CommonPool.length;
-    await load(curindex,searchTag.rawTag,needCount, false)
+    if (needCount >= chufajiazaiyuzhi) {
+        await load(curindex,searchTag.rawTag,needCount, false);
+    }
+
 }
+
+///启动时初始化池，可能导致启动变慢。
+LoadPool();
 
 /**
  * 根据`tags`和`allowR18`开关创建查询
@@ -447,21 +468,26 @@ module.exports = async function (recvObj, client) {
         burstNum = 3;
     }
 
+    let index = 0
     // 匹配性癖标签
     for (const searchTag of tagList.searchTags) {
+        let curindex = index;
+
         if (new RegExp(searchTag.regExp, 'im').test(recvObj.content)) {
-            PixivPic(recvObj, client, searchTag.rawTag, {
+            PixivPic(recvObj, client, curindex, {
                 autoBurst,
                 burstNum,
                 num
             });
             return true;
         }
+
+        index++;
     }
 
-    // Fallback
+    // Fallback 没有标签使用下标为-1的池。
     if (/(色|涩|瑟)图|gkd|搞快点|开车|不够(色|涩|瑟)/im.test(recvObj.content)) {
-        PixivPic(recvObj, client, null, {
+        PixivPic(recvObj, client, -1, {
             autoBurst,
             burstNum,
             num
@@ -472,12 +498,25 @@ module.exports = async function (recvObj, client) {
     return false;
 }
 
-async function PixivPic(recvObj, client, tags, opt) {
+/**
+ * 发送过的池
+ */
+let sendedPool = [];
+let sendedPoolMaxCount = 10;
+
+/**
+ * 
+ * @param {*} recvObj 
+ * @param {*} client 
+ * @param {integer} tagsIndex 将Tag改为Tag下标
+ * @param {*} opt 
+ */
+async function PixivPic(recvObj, client, tagsIndex, opt) {
     // N连抽
     if (opt.autoBurst) {
         opt.autoBurst = false;
         for (let i = 0; i < opt.burstNum; i++) {
-            await PixivPic(recvObj, client, tags, opt);
+            await PixivPic(recvObj, client, tagsIndex, opt);
         }
         return;
     }
@@ -512,10 +551,51 @@ async function PixivPic(recvObj, client, tags, opt) {
     }
 
     let illustPath;
+    let illust;
     try {
-        const illust = await searchIllust(recvObj, tags, opt);
-        if (!illust) throw 'illust is null';
-        illustPath = await downloadIllust(illust.image_url);
+        // const illust = await searchIllust(recvObj, tags, opt);
+        // if (!illust) throw 'illust is null';
+        // illustPath = await downloadIllust(illust.image_url);
+        
+        //直接从池中获取
+        let allowR18 = recvObj.type == 1;
+        let curpool;
+        if (allowR18) {
+            curpool = pool[tagIndex].R18Pool;
+        } 
+        else {
+            curpool = pool[tagIndex].CommonPool;
+        }
+
+        let result;
+
+        for (let index = 0; index < curpool.length; index++) {
+            const element = array[index];
+            
+            if (recvObj.type != 1) {
+                //找到一个group不冲突的
+                if (element.SeenGroups.indexOf(recvObj.group) == -1) {
+                    result = element;
+                    break;
+                }
+            }
+            else{
+                //私聊不记录组？
+                result = element;
+                break;
+            }
+        }
+
+        ///从池中移除。
+        curpool.remove(result);
+
+        if (result) {
+            illustPath = result.ImagePath;
+            illust = result.illust;
+        }else {
+            //池空了 todo 醋无消息
+        }
+
     } catch {}
 
     if (illustPath) {
@@ -527,9 +607,26 @@ async function PixivPic(recvObj, client, tags, opt) {
         }
 
         client.sendMsg(recvObj, `[QQ:pic=${illustPath}]`);
+
+        ///发送结束将illustPath插入发送池，方便重发。重发不涉及记录逻辑。只需保存本地地址即可。
+        if (recvObj.group) {
+            if (!sendedPool[recvObj.group]) {
+                sendedPool[recvObj.group] = { "Cursor":0,"SendQ":[]};//初始化。记录游标，每次发送游标+1。
+            }
+
+            let curPool = sendedPool[recvObj.group];
+            let cur = curPool.Cursor;
+            curPool.SendQ[cur%sendedPoolMaxCount] = illustPath;//取余做环。
+            curPool.Cursor = cur + 1;
+        }
+        ///发送结束补充池
+        LoadPool();
+
     } else {
         client.sendMsg(recvObj, `[QQ:pic=${secret.emoticonsPath}\\satania_cry.gif]`);
     }
+
+    
 }
 
 async function InsertSeen(group_id,illust_id){
@@ -539,3 +636,4 @@ async function InsertSeen(group_id,illust_id){
         date: moment().format()
     });
 }
+
