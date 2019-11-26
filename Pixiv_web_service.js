@@ -34,6 +34,11 @@ const knex = require('knex')({
             table.string('name');
         });
     }
+    if (!(await knex.schema.hasColumn('users', 'group'))) {
+        await knex.schema.table('users', table => {
+            table.string('group');
+        });
+    }
     if (!(await knex.schema.hasColumn('user_tags', 'account'))) {
         await knex.schema.table('user_tags', table => {
             table.string('account').index('account');
@@ -65,6 +70,13 @@ const app = express();
 const port = 33000;
 
 app.use(express.json());
+
+// 支持跨域
+app.all('*', (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    next();
+});
 
 // 获得用户名
 app.post('/getUserName', async (req, res) => {
@@ -131,12 +143,37 @@ app.post('/login', async (req, res) => {
     await knex('users').where('account', account).update(user);
     res.json({
         result: true,
-        nextUri: '/edit.html?key=' + req.body.userKey
+        nextUrl: encodeURI('edit.html?key=' + req.body.userKey)
     });
 });
 
 // 获得所有用户标签
-app.get('/getUserTags', async (req, res) => {
+app.post('/getUserTags', async (req, res) => {
+    if (!_.isString(req.body.userKey)) {
+        res.json({
+            err: true
+        });
+        return;
+    }
+
+    let account;
+    try {
+        account = Buffer.from(req.body.userKey, 'base64').toString('utf8');
+    } catch {
+        res.json({
+            err: '用户密钥错误'
+        });
+        return;
+    }
+
+    const user = (await knex('users').where('account', account))[0];
+    if (_.isEmpty(user)) {
+        res.json({
+            err: '用户未注册'
+        });
+        return;
+    }
+
     const userTags = await knex('user_tags').leftJoin('users', 'user_tags.account', 'users.account')
         .select(
             'user_tags.id as id',
@@ -146,9 +183,16 @@ app.get('/getUserTags', async (req, res) => {
             'user_tags.raw_tags as rawTags',
             'comment'
         );
+    let editableId
+    if (user.group == 'admin') {
+        editableId = await knex('user_tags').select('id');
+    } else {
+        editableId = await knex('user_tags').where('account', account).select('id');
+    }
     res.json({
         result: true,
-        userTags
+        userTags,
+        editableId
     });
 });
 
@@ -218,7 +262,7 @@ app.post('/setUserTag', async (req, res) => {
         }
         if (userTag.account != account) {
             res.json({
-                err: '你不能修其他用户的标签'
+                err: '你不能编辑其他用户的标签'
             });
             return;
         }
