@@ -123,9 +123,9 @@ function updateIllusts() {
 }
 
 let perTagCount = {}
-
+let pool = {}
 /**
- * 初始化各个标签图片个数。
+ * 初始化各个标签图片个数。初始化池结构。
  */
 function InitGlobalCount(){
     let index = 0;
@@ -139,16 +139,100 @@ function InitGlobalCount(){
         const totalCount = (await q.count('* as count'))[0].count;
         perTagCount[curindex] = {"notR18Count":notR18Count,"totalCount":totalCount}
 
+        //初始化池结构
+        pool[index] = {"R18Pool":[],"CommonPool":[]};
         index++;
     }
 
     globalTotalCount = await knex('illusts').count('* as count')[0].count;
     globalNotR18Count = await knex('illusts').where('rating', 'not like', 'r18%').count('* as count')[0].count;
     perTagCount[-1] = {"notR18Count":globalNotR18Count,"totalCount":globalTotalCount}
+    pool[-1] = {"R18Pool":[],"CommonPool":[]};
 }
 
 InitGlobalCount();//这里可能导致启动过慢 
 
+
+/**
+ * 根据`tags`和`allowR18` 加载图片。加载完成后放入池中
+ * 这里不再设计重发逻辑。发送过后建立环形缓冲区，从缓冲区重发，不在走查数据库和下载步骤。
+ * @param tagIndex 标签在全局列表中的下标。所有池使用此下标做Key。全局列表用-1做key。
+ * @param tags 查询的标签列表
+ * @param loadcount 加载数量
+ * @param allowR18 是否允许R18图片
+ */
+async function load(tagIndex, tags,loadcount,allowR18)
+{
+    let query = CreateTagsQuery(tags,allowR18);
+    const rand = 1 - Math.pow(1 - Math.random(), 2);
+    ///这里直接使用全局图片总数减少数据库访问。
+    let totalImageCount;
+    if (allowR18) {
+        totalImageCount = perTagCount[tagIndex].totalCount
+    }else{
+        totalImageCount = perTagCount[tagIndex].notR18Count
+    }
+    var offset = rand * totalImageCount;
+
+    ///这里多取一些结果，多余的弃用
+    let getCount = loadcount + 20
+    illust = await query.limit(getCount).offset(parseInt(rand * totalImageCount));
+
+    let resultCount = ill
+    illust.forEach(async element => {
+        ///查询被哪些群看过，如果被两个群看过，且查询到的结果还足够就舍弃
+        var groups = await knex.select('group').from('seen_list').where('illust_id', element.id)//这里得到看过群的id数组。
+        //todo 这里也要根据时间过滤
+        if (groups.length > 2) {
+            continue;
+        }
+
+
+        ///如果查询得到的图片有效，进入下载步骤。
+        var localPath = await downloadIllust(element.image_url);
+        if (localPath) {
+            let curpool;
+            if (allowR18) {
+                curpool = pool[tagIndex].R18Pool;
+            } 
+            else {
+                curpool = pool[tagIndex].CommonPool;
+            }
+
+            curpool.push({"IsR18":allowR18, "ImagePath":localPath,"SeenGroups":groups,"illust":element})
+        }
+    });
+    
+}
+
+/**
+ * 每个池的最大容量，这里用 一个十连 + 一个三连
+ */
+let perPoolCount = 13;
+/**
+ * 加载池
+ */
+async function LoadPool(){
+    let index = 0;
+    for (const searchTag of tagList.searchTags) {
+        let curIndex = index;
+
+        let needCount = perPoolCount - pool[curIndex].R18Pool.length;
+        await load(curindex,searchTag.rawTag,needCount, true)
+
+        let needCount = perPoolCount - pool[curIndex].CommonPool.length;
+        await load(curindex,searchTag.rawTag,needCount, false)
+
+        index++;
+    }
+
+    index = -1;
+    let needCount = perPoolCount - pool[index].R18Pool.length;
+    await load(curindex,searchTag.rawTag,needCount, true)
+
+    let needCount = perPoolCount - pool[index].CommonPool.length;
+    await load(curindex,searchTag.rawTag,needCount, false)
+}
 
 /**
  * 根据`tags`和`allowR18`开关创建查询
