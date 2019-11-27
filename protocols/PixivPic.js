@@ -68,10 +68,15 @@ async function initDatabase() {
 
 let isInitialized = false;
 
+// 异步函数初始化
 (async function () {
     cleanUp();
     // 初始化数据库
     await initDatabase();
+
+    await InitGlobalCount();
+
+    await LoadPool();
 
     isInitialized = true;
 })();
@@ -122,66 +127,112 @@ function updateIllusts() {
     childProcess.fork('Pixiv_database.js', [tagList.sexTags.join() + ',' + tagList.charTags.join(), 'day', 0, 0, 7]);
 }
 
-let perTagCount = {}
-let pool = {}
+// []是数组，{}是对象没有length属性
+// 尽量用 ; 作为句末，虽然没有也可以执行，但是可能会遇见奇怪的bug
+// const 定义变量是指这个变量类型固定不可更改
+// let定义变量性质类似var，可以重新通过赋值改变变量类型
+// let x;               // x 为 undefined
+// let x = 5;           // 现在 x 为数字
+// let x = "foobar";      // 现在 x 为字符串
+// 如果尝试对const定义的变量赋值将会报错
+let perTagCount = [];
+let pool = [];
 /**
  * 初始化各个标签图片个数。初始化池结构。
  */
-function InitGlobalCount(){
-    let index = 0;
-    for (const searchTag of tagList.searchTags) {
+function InitGlobalCount() {
+    // let index = 0;
 
-        let curindex = index; //防止异步导致下标错乱？？？这里不清楚
+    // 对于数组直接用for循环即可，i 可作为下标
+    for (let i = 0; i < tagList.searchTags.length; i++) {
+        const searchTag = tagList.searchTags[i];
+
+        // let curindex = index; //防止异步导致下标错乱？？？这里不清楚
         //分别查出两种图片数量
-        var q = CreateTagsQuery(searchTag.rawTag,true);
+        const q = CreateTagsQuery(searchTag.rawTag, true);
         const notR18Count = (await q.count('* as count'))[0].count;
-        var q2 = CreateTagsQuery(searchTag.rawTag,false);
-        const totalCount = (await q.count('* as count'))[0].count;
-        perTagCount[curindex] = {"notR18Count":notR18Count,"totalCount":totalCount}
+        const q2 = CreateTagsQuery(searchTag.rawTag, false);
+        const totalCount = (await q2.count('* as count'))[0].count;
+        // 成员名称不需要引号，在js里面字符串单引双引都可以，貌似遵循linux标准
+        // 如果上下文中有变量名与成员名同名，则以下两种写法等价
+        // perTagCount[i] = {
+        //     notR18Count: notR18Count,
+        //     totalCount: totalCount
+        // }
+        // perTagCount[i] = {
+        //     notR18Count,
+        //     totalCount
+        // }
+
+        // 如果数组下标不连续，不建议直接用下标赋值数组中的元素
+        // 例如:
+        // const a = [];
+        // a[0] = 'foo';
+        // a[2] = 'bar'
+        // console.log(a);
+        // 输出：[ 'foo', <1 empty item>, 'bar' ]
+        // 可以考虑用a.push(...)方法
+        perTagCount[i] = {
+            notR18Count,
+            totalCount
+        }
 
         //初始化池结构
-        pool[index] = {"R18Pool":[],"CommonPool":[]};
-        index++;
+        pool[i] = {
+            R18Pool: [],
+            CommonPool: []
+        };
+        // index++;
     }
 
     globalTotalCount = await knex('illusts').count('* as count')[0].count;
     globalNotR18Count = await knex('illusts').where('rating', 'not like', 'r18%').count('* as count')[0].count;
-    perTagCount[-1] = {"notR18Count":globalNotR18Count,"totalCount":globalTotalCount}
-    pool[-1] = {"R18Pool":[],"CommonPool":[]};
+
+    // js中没有[-1]这种操作
+    perTagCount[perTagCount.length - 1] = {
+        notR18Count: globalNotR18Count,
+        totalCount: globalTotalCount
+    }
+    pool[pool.length - 1] = {
+        R18Pool: [],
+        CommonPool: []
+    };
 }
 
-await InitGlobalCount();//这里可能导致启动过慢 
+// await不能在同步中运行
+// await InitGlobalCount(); //这里可能导致启动过慢 
 
 
 /**
  * 根据`tags`和`allowR18` 加载图片。加载完成后放入池中
  * 这里不再设计重发逻辑。发送过后建立环形缓冲区，从缓冲区重发，不在走查数据库和下载步骤。
- * @param tagIndex 标签在全局列表中的下标。所有池使用此下标做Key。全局列表用-1做key。
- * @param tags 查询的标签列表
- * @param loadcount 加载数量
- * @param allowR18 是否允许R18图片
+ * @param {number} tagIndex 标签在全局列表中的下标。所有池使用此下标做Key。全局列表用-1做key。
+ * @param {string[]} tags 查询的标签列表
+ * @param {number} loadcount 加载数量
+ * @param {boolean} allowR18 是否允许R18图片
  */
-async function load(tagIndex, tags,loadcount,allowR18)
-{
-    let query = CreateTagsQuery(tags,allowR18);
+async function load(tagIndex, tags, loadcount, allowR18) {
+    let query = CreateTagsQuery(tags, allowR18);
     const rand = 1 - Math.pow(1 - Math.random(), 2);
     ///这里直接使用全局图片总数减少数据库访问。
     let totalImageCount;
     if (allowR18) {
         totalImageCount = perTagCount[tagIndex].totalCount
-    }else{
+    } else {
         totalImageCount = perTagCount[tagIndex].notR18Count
     }
     var offset = rand * totalImageCount;
 
     ///这里多取一些结果，多余的弃用
     let getCount = loadcount + 20
-    illust = await query.limit(getCount).offset(parseInt(rand * totalImageCount));
+    // 这个变量没定义
+    const illusts = await query.limit(getCount).offset(parseInt(rand * totalImageCount));
 
-    let resultCount = ill
-    illust.forEach(async element => {
+    // let resultCount = ill //wtf
+    for (const element of illusts) {
+
         ///查询被哪些群看过，如果被两个群看过，且查询到的结果还足够就舍弃
-        var groups = await knex.select('group').from('seen_list').where('illust_id', element.id)//这里得到看过群的id数组。
+        var groups = await knex.select('group').from('seen_list').where('illust_id', element.id) //这里得到看过群的id数组。
         //todo 这里也要根据时间过滤
         if (groups.length > 2) {
             continue;
@@ -194,19 +245,23 @@ async function load(tagIndex, tags,loadcount,allowR18)
             let curpool;
             if (allowR18) {
                 curpool = pool[tagIndex].R18Pool;
-            } 
-            else {
+            } else {
                 curpool = pool[tagIndex].CommonPool;
             }
 
-            curpool.push({"IsR18":allowR18, "ImagePath":localPath,"SeenGroups":groups,"illust":element})
-            
+            curpool.push({
+                IsR18: allowR18,
+                ImagePath: localPath,
+                SeenGroups: groups,
+                illust: element
+            })
+
             if (curpool.length >= loadcount) {
-                break;//满了就停。
+                break; //满了就停。
             }
         }
-    });
-    
+    }
+
 }
 
 /**
@@ -216,51 +271,53 @@ let perPoolCount = 13;
 /**
  * 触发加载阈值
  */
-let chufajiazaiyuzhi = 5;
+let triggerThreshold = 5;
 /**
  * 加载池
  */
-async function LoadPool(){
-    let index = 0;
-    for (const searchTag of tagList.searchTags) {
-        let curIndex = index;
+async function LoadPool() {
+    // let index = 0;
 
-        let needCount = perPoolCount - pool[curIndex].R18Pool.length;
-        if (needCount >= chufajiazaiyuzhi) {
-            await load(curindex,searchTag.rawTag,needCount, true);
+    for (let i = 0; i < tagList.searchTags.length; i++) {
+        const searchTag = tagList.searchTags[i];
+
+        let needCount = perPoolCount - pool[i].R18Pool.length;
+        if (needCount >= triggerThreshold) {
+            await load(i, searchTag.rawTag, needCount, true);
         }
 
-        let needCount = perPoolCount - pool[curIndex].CommonPool.length;
-        if (needCount >= chufajiazaiyuzhi) {
-            await load(curindex,searchTag.rawTag,needCount, false);
+        let needCount = perPoolCount - pool[i].CommonPool.length;
+        if (needCount >= triggerThreshold) {
+            await load(i, searchTag.rawTag, needCount, false);
         }
 
-        index++;
+        // index++;
     }
 
-    index = -1;
-    let needCount = perPoolCount - pool[index].R18Pool.length;
-    if (needCount >= chufajiazaiyuzhi) {
-        await load(curindex,searchTag.rawTag,needCount, true);
+    // index = -1;
+    // 这里已经离开作用域
+    let needCount = perPoolCount - pool[pool.length - 1].R18Pool.length;
+    if (needCount >= triggerThreshold) {
+        await load(pool.length - 1, tagList.searchTags[pool.length - 1].rawTag, needCount, true);
     }
 
 
-    let needCount = perPoolCount - pool[index].CommonPool.length;
-    if (needCount >= chufajiazaiyuzhi) {
-        await load(curindex,searchTag.rawTag,needCount, false);
+    let needCount = perPoolCount - pool[pool.length - 1].CommonPool.length;
+    if (needCount >= triggerThreshold) {
+        await load(pool.length - 1, tagList.searchTags[pool.length - 1].rawTag, needCount, false);
     }
 
 }
 
 ///启动时初始化池，可能导致启动变慢。
-LoadPool();
+// LoadPool();
 
 /**
  * 根据`tags`和`allowR18`开关创建查询
  * @param tags 查询的标签列表
  * @param allowR18 是否允许R18图片
  */
-function CreateTagsQuery(tags,allowR18){
+function CreateTagsQuery(tags, allowR18) {
     let illustsQuery;
     if (tags) {
         let stringQuery = '';
@@ -281,7 +338,7 @@ function CreateTagsQuery(tags,allowR18){
     }
 
     //尽量取最少的列
-    return illustsQuery.select("id","image_url");
+    return illustsQuery.select("id", "image_url");
 }
 
 async function searchIllust(recvObj, tags, opt) {
@@ -354,7 +411,7 @@ async function searchIllust(recvObj, tags, opt) {
 /**
  * 下载图片到本地。并处理图片。
  * 这里返回的是本地图片路径。内存中并没有缓存图片。所以可以做池。
- * @param {*} image_url 图片地址
+ * @param {string} image_url 图片地址
  */
 async function downloadIllust(image_url) {
     try {
@@ -506,10 +563,10 @@ let sendedPoolMaxCount = 10;
 
 /**
  * 
- * @param {*} recvObj 
- * @param {*} client 
- * @param {integer} tagsIndex 将Tag改为Tag下标
- * @param {*} opt 
+ * @param {object} recvObj 
+ * @param {WebSocket} client 
+ * @param {number} tagsIndex 将Tag改为Tag下标
+ * @param {object} opt 
  */
 async function PixivPic(recvObj, client, tagsIndex, opt) {
     // N连抽
@@ -556,43 +613,48 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
         // const illust = await searchIllust(recvObj, tags, opt);
         // if (!illust) throw 'illust is null';
         // illustPath = await downloadIllust(illust.image_url);
-        
+
         //直接从池中获取
+        // recvObj.type需要封装成枚举
         let allowR18 = recvObj.type == 1;
         let curpool;
         if (allowR18) {
             curpool = pool[tagIndex].R18Pool;
-        } 
-        else {
+        } else {
             curpool = pool[tagIndex].CommonPool;
         }
 
         let result;
 
         for (let index = 0; index < curpool.length; index++) {
-            const element = array[index];
-            
+            // array[index]??
+            const element = curpool[index];
+
             if (recvObj.type != 1) {
                 //找到一个group不冲突的
                 if (element.SeenGroups.indexOf(recvObj.group) == -1) {
                     result = element;
                     break;
                 }
-            }
-            else{
+            } else {
                 //私聊不记录组？
+                // 是的
                 result = element;
                 break;
             }
         }
 
         ///从池中移除。
-        curpool.remove(result);
+        // curpool.remove(result);
+
+        // js数组没有remove方法
+        curpool.splice(curpool.indexOf(result), 1);
+
 
         if (result) {
             illustPath = result.ImagePath;
             illust = result.illust;
-        }else {
+        } else {
             //池空了 todo 醋无消息
         }
 
@@ -603,7 +665,7 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
 
         //分离记录看过数据和下载逻辑
         if (!opt.resend && !(recvObj.type == 1 || recvObj.type == 3 || recvObj.type == 5 || recvObj.type == 6) && recvObj.group != '') {
-            await InsertSeen(recvObj.group,illust.id);
+            await InsertSeen(recvObj.group, illust.id);
         }
 
         client.sendMsg(recvObj, `[QQ:pic=${illustPath}]`);
@@ -611,12 +673,15 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
         ///发送结束将illustPath插入发送池，方便重发。重发不涉及记录逻辑。只需保存本地地址即可。
         if (recvObj.group) {
             if (!sendedPool[recvObj.group]) {
-                sendedPool[recvObj.group] = { "Cursor":0,"SendQ":[]};//初始化。记录游标，每次发送游标+1。
+                sendedPool[recvObj.group] = {
+                    Cursor: 0,
+                    SendQ: []
+                }; //初始化。记录游标，每次发送游标+1。
             }
 
             let curPool = sendedPool[recvObj.group];
             let cur = curPool.Cursor;
-            curPool.SendQ[cur%sendedPoolMaxCount] = illustPath;//取余做环。
+            curPool.SendQ[cur % sendedPoolMaxCount] = illustPath; //取余做环。
             curPool.Cursor = cur + 1;
         }
         ///发送结束补充池
@@ -626,14 +691,13 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
         client.sendMsg(recvObj, `[QQ:pic=${secret.emoticonsPath}\\satania_cry.gif]`);
     }
 
-    
+
 }
 
-async function InsertSeen(group_id,illust_id){
+async function InsertSeen(group_id, illust_id) {
     await knex('seen_list').insert({
         group: group_id,
         illust_id: illust_id,
         date: moment().format()
     });
 }
-
