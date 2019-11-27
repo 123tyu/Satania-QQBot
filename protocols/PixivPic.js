@@ -150,9 +150,9 @@ function InitGlobalCount() {
         // let curindex = index; //防止异步导致下标错乱？？？这里不清楚
         //分别查出两种图片数量
         const q = CreateTagsQuery(searchTag.rawTag, true);
-        const notR18Count = (await q.count('* as count'))[0].count;
+        const YouHuangTu = (await q.count('* as count'))[0].count;
         const q2 = CreateTagsQuery(searchTag.rawTag, false);
-        const totalCount = (await q2.count('* as count'))[0].count;
+        const WuHuangTu = (await q2.count('* as count'))[0].count;
         // 成员名称不需要引号，在js里面字符串单引双引都可以，貌似遵循linux标准
         // 如果上下文中有变量名与成员名同名，则以下两种写法等价
         // perTagCount[i] = {
@@ -173,14 +173,14 @@ function InitGlobalCount() {
         // 输出：[ 'foo', <1 empty item>, 'bar' ]
         // 可以考虑用a.push(...)方法
         perTagCount[i] = {
-            notR18Count,
-            totalCount
+            YouHuangTu_Count: YouHuangTu,
+            WuHuangTu_Count: WuHuangTu
         }
 
         //初始化池结构
         pool[i] = {
-            R18Pool: [],
-            CommonPool: []
+            YouHuangTu_Pool: [],
+            WuHuangTu_Pool: []
         };
         // index++;
     }
@@ -188,14 +188,14 @@ function InitGlobalCount() {
     globalTotalCount = await knex('illusts').count('* as count')[0].count;
     globalNotR18Count = await knex('illusts').where('rating', 'not like', 'r18%').count('* as count')[0].count;
 
-    // js中没有[-1]这种操作
-    perTagCount[perTagCount.length - 1] = {
-        notR18Count: globalNotR18Count,
-        totalCount: globalTotalCount
+    // 全局下标使用-1
+    perTagCount[-1] = {
+        WuHuangTu_Count: globalNotR18Count,
+        YouHuangTu_Count: globalTotalCount
     }
-    pool[pool.length - 1] = {
-        R18Pool: [],
-        CommonPool: []
+    pool[-1] = {
+        YouHuangTu_Pool: [],
+        WuHuangTu_Pool: []
     };
 }
 
@@ -217,9 +217,9 @@ async function load(tagIndex, tags, loadcount, allowR18) {
     ///这里直接使用全局图片总数减少数据库访问。
     let totalImageCount;
     if (allowR18) {
-        totalImageCount = perTagCount[tagIndex].totalCount
+        totalImageCount = perTagCount[tagIndex].YouHuangTu_Count
     } else {
-        totalImageCount = perTagCount[tagIndex].notR18Count
+        totalImageCount = perTagCount[tagIndex].WuHuangTu_Count
     }
     var offset = rand * totalImageCount;
 
@@ -244,9 +244,9 @@ async function load(tagIndex, tags, loadcount, allowR18) {
         if (localPath) {
             let curpool;
             if (allowR18) {
-                curpool = pool[tagIndex].R18Pool;
+                curpool = pool[tagIndex].YouHuangTu_Pool;
             } else {
-                curpool = pool[tagIndex].CommonPool;
+                curpool = pool[tagIndex].WuHuangTu_Pool;
             }
 
             curpool.push({
@@ -265,9 +265,9 @@ async function load(tagIndex, tags, loadcount, allowR18) {
 }
 
 /**
- * 每个池的最大容量，这里用 一个十连 + 一个三连
+ * 每个池的最大容量，这里用根据机器性能设置。
  */
-let perPoolCount = 13;
+let perPoolCount = 26;
 /**
  * 触发加载阈值
  */
@@ -281,12 +281,12 @@ async function LoadPool() {
     for (let i = 0; i < tagList.searchTags.length; i++) {
         const searchTag = tagList.searchTags[i];
 
-        let needCount = perPoolCount - pool[i].R18Pool.length;
+        let needCount = perPoolCount - pool[i].YouHuangTu_Pool.length;
         if (needCount >= triggerThreshold) {
             await load(i, searchTag.rawTag, needCount, true);
         }
 
-        let needCount = perPoolCount - pool[i].CommonPool.length;
+        let needCount = perPoolCount - pool[i].WuHuangTu_Pool.length;
         if (needCount >= triggerThreshold) {
             await load(i, searchTag.rawTag, needCount, false);
         }
@@ -295,16 +295,16 @@ async function LoadPool() {
     }
 
     // index = -1;
-    // 这里已经离开作用域
-    let needCount = perPoolCount - pool[pool.length - 1].R18Pool.length;
+    // 这里已经离开作用域  全局色图没有标签
+    let needCount = perPoolCount - pool[-1].YouHuangTu_Pool.length;
     if (needCount >= triggerThreshold) {
-        await load(pool.length - 1, tagList.searchTags[pool.length - 1].rawTag, needCount, true);
+        await load(-1, null, needCount, true);
     }
 
 
-    let needCount = perPoolCount - pool[pool.length - 1].CommonPool.length;
+    let needCount = perPoolCount - pool[-1].WuHuangTu_Pool.length;
     if (needCount >= triggerThreshold) {
-        await load(pool.length - 1, tagList.searchTags[pool.length - 1].rawTag, needCount, false);
+        await load(-1, null, needCount, false);
     }
 
 }
@@ -619,9 +619,9 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
         let allowR18 = recvObj.type == 1;
         let curpool;
         if (allowR18) {
-            curpool = pool[tagIndex].R18Pool;
+            curpool = pool[tagIndex].YouHuangTu_Pool;
         } else {
-            curpool = pool[tagIndex].CommonPool;
+            curpool = pool[tagIndex].WuHuangTu_Pool;
         }
 
         let result;
