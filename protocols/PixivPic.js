@@ -116,8 +116,43 @@ function cleanUp() {
     const illustDir = fs.readdirSync(path.join(secret.tempPath, 'image'));
     for (const illustPath of illustDir) {
         let fullName = path.join(secret.tempPath, 'image', illustPath);
+        let needClean = true;
 
-        fs.unlinkSync(fullName);
+        ///不清理还在池中的
+        for (var key in pool) {
+            var item = pool[key];
+            for (const element of item.YouHuangTu_Pool) {
+                if (element.ImagePath == fullName) {
+                    needClean = false;
+                    break;
+                }
+            }
+
+            for (const element of item.WuHuangTu_Pool) {
+                if (element.ImagePath == fullName) {
+                    needClean = false;
+                    break;
+                }
+            }
+        }
+
+        ///不清理还在记录中的
+        for (var key in sendedPool) {
+            var item = pool[key];
+            for (const element of item.SendQ) {
+                if (element) {
+                    if (element.ImagePath == fullName) {
+                        needClean = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (needClean) {
+            fs.unlinkSync(fullName);
+        }
+        
     }
 }
 
