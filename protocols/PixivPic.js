@@ -115,7 +115,9 @@ const timer = setInterval(() => {
 function cleanUp() {
     const illustDir = fs.readdirSync(path.join(secret.tempPath, 'image'));
     for (const illustPath of illustDir) {
-        fs.unlinkSync(path.join(secret.tempPath, 'image', illustPath));
+        let fullName = path.join(secret.tempPath, 'image', illustPath);
+
+        fs.unlinkSync(fullName);
     }
 }
 
@@ -609,14 +611,79 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
 
     let illustPath;
     let illust;
+    let result;
     try {
-        // const illust = await searchIllust(recvObj, tags, opt);
-        // if (!illust) throw 'illust is null';
-        // illustPath = await downloadIllust(illust.image_url);
-
-        //直接从池中获取
-        // recvObj.type需要封装成枚举
+        
         let allowR18 = recvObj.type == 1;
+        result = GetImageResult(opt,recvObj.group,tagIndex,allowR18);
+        illustPath = result.ImagePath;
+        illust = result.illust;
+        
+    } catch {}
+
+    if (illustPath) {
+        illustCharge[recvObj.group].count--;
+
+        //分离记录看过数据和下载逻辑
+        if (!opt.resend && !(recvObj.type == 1 || recvObj.type == 3 || recvObj.type == 5 || recvObj.type == 6) && recvObj.group != '') {
+            await InsertSeen(recvObj.group, illust.id);
+        }
+
+        client.sendMsg(recvObj, `[QQ:pic=${illustPath}]`);
+
+        ///发送结束将illustPath插入发送池，方便重发。重发不涉及记录逻辑。只需保存本地地址即可。
+        if (recvObj.group) {
+            if (!sendedPool[recvObj.group]) {
+                sendedPool[recvObj.group] = {
+                    Cursor: 0,
+                    SendQ: []
+                }; //初始化。记录游标，每次发送游标+1。
+            }
+
+            let curPool = sendedPool[recvObj.group];
+            let cur = curPool.Cursor;
+            curPool.SendQ[cur % sendedPoolMaxCount] = result; //取余做环。
+            curPool.Cursor = cur + 1;
+        }
+        ///发送结束补充池
+        LoadPool();
+
+    } else {
+        client.sendMsg(recvObj, `[QQ:pic=${secret.emoticonsPath}\\satania_cry.gif]`);
+    }
+
+
+}
+
+async function InsertSeen(group_id, illust_id) {
+    await knex('seen_list').insert({
+        group: group_id,
+        illust_id: illust_id,
+        date: moment().format()
+    });
+}
+
+/**
+ * 从发送过的记录中或者池中取得现有图片结果
+ * @param {*} opt 
+ * @param {number} group_id 
+ * @param {number} tagIndex 
+ * @param {boolean} allowR18 
+ */
+function GetImageResult(opt,group_id,tagIndex,allowR18){
+
+    if (opt.resend) {
+        ///重发从记录池中取结果。
+        if (group_id) {
+            if (sendedPool[group_id]) {
+                let curPool = sendedPool[group_id];
+                let cur = curPool.Cursor;
+                cur -= opt.num;
+                return curPool.SendQ[cur % sendedPoolMaxCount]; 
+            }
+        }
+    } else {
+        //直接从池中获取
         let curpool;
         if (allowR18) {
             curpool = pool[tagIndex].YouHuangTu_Pool;
@@ -649,55 +716,10 @@ async function PixivPic(recvObj, client, tagsIndex, opt) {
 
         // js数组没有remove方法
         curpool.splice(curpool.indexOf(result), 1);
-
-
-        if (result) {
-            illustPath = result.ImagePath;
-            illust = result.illust;
-        } else {
-            //池空了 todo 醋无消息
-        }
-
-    } catch {}
-
-    if (illustPath) {
-        illustCharge[recvObj.group].count--;
-
-        //分离记录看过数据和下载逻辑
-        if (!opt.resend && !(recvObj.type == 1 || recvObj.type == 3 || recvObj.type == 5 || recvObj.type == 6) && recvObj.group != '') {
-            await InsertSeen(recvObj.group, illust.id);
-        }
-
-        client.sendMsg(recvObj, `[QQ:pic=${illustPath}]`);
-
-        ///发送结束将illustPath插入发送池，方便重发。重发不涉及记录逻辑。只需保存本地地址即可。
-        if (recvObj.group) {
-            if (!sendedPool[recvObj.group]) {
-                sendedPool[recvObj.group] = {
-                    Cursor: 0,
-                    SendQ: []
-                }; //初始化。记录游标，每次发送游标+1。
-            }
-
-            let curPool = sendedPool[recvObj.group];
-            let cur = curPool.Cursor;
-            curPool.SendQ[cur % sendedPoolMaxCount] = illustPath; //取余做环。
-            curPool.Cursor = cur + 1;
-        }
-        ///发送结束补充池
-        LoadPool();
-
-    } else {
-        client.sendMsg(recvObj, `[QQ:pic=${secret.emoticonsPath}\\satania_cry.gif]`);
+        return result;
     }
 
-
+    return null;
 }
 
-async function InsertSeen(group_id, illust_id) {
-    await knex('seen_list').insert({
-        group: group_id,
-        illust_id: illust_id,
-        date: moment().format()
-    });
-}
+
